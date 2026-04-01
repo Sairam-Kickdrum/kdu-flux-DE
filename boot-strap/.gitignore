@@ -1,0 +1,67 @@
+
+# Local .terraform directory
+
+.terraform/
+
+# Terraform state files
+
+*.tfstate
+*.tfstate.*
+
+# Crash logs
+
+crash.log
+crash.*.log
+
+# Terraform plan files
+
+*.tfplan
+*.plan
+
+# Override files
+
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration files
+
+.terraformrc
+terraform.rc
+
+# Sensitive variable files
+
+*.tfvars
+*.tfvars.json
+
+# Ignore local backend config files
+
+backend.tfvars
+
+# Ignore lock file ONLY if you're building reusable modules
+
+# Otherwise you should commit it
+
+# .terraform.lock.hcl
+
+# macOS
+
+.DS_Store
+
+# Windows
+
+Thumbs.db
+
+# VS Code
+
+.vscode/
+
+# IntelliJ / JetBrains
+
+.idea/
+
+# Logs
+
+*.log
+"}
