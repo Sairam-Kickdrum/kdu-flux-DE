@@ -45,3 +45,33 @@ variable "log_retention_in_days" {
   type        = number
   default     = 14
 }
+
+variable "adscribe_dynamodb_table_name" {
+  description = "Existing DynamoDB table used for Adscribe batch tracking."
+  type        = string
+  default     = "kdu-flux-dynamodb-table-de"
+}
+
+variable "adscribe_bucket_name" {
+  description = "Existing S3 bucket used for Adscribe raw landing."
+  type        = string
+  default     = "kduflux-de-bucket"
+}
+
+variable "adscribe_glue_job_name" {
+  description = "Glue Python Shell job name for Adscribe raw landing."
+  type        = string
+  default     = "flux-de-adscribe-raw-landing"
+}
+
+variable "adscribe_step_function_name" {
+  description = "Step Functions state machine name for Adscribe raw landing."
+  type        = string
+  default     = "flux-de-adscribe-raw-landing"
+}
+
+variable "adscribe_glue_script_s3_key" {
+  description = "S3 key used to store the Glue Python Shell script."
+  type        = string
+  default     = "glue-scripts/adscribe/adscribe_raw_landing.py"
+}
