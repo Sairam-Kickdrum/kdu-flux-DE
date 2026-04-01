@@ -39,6 +39,58 @@ def download_csv(presigned_url: str) -> bytes:
         return response.read()
 
 
+def update_batch_status(
+    dynamodb_client: object,
+    table_name: str,
+    batch_id: str,
+    *,
+    status: str,
+    updated_at: str,
+    run_id: str | None = None,
+    bucket_name: str | None = None,
+    source_key: str | None = None,
+    metadata_key: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    update_parts = ["#status = :status", "#updated_at = :updated_at"]
+    expression_attribute_names = {
+        "#status": "status",
+        "#updated_at": "updated_at",
+    }
+    expression_attribute_values = {
+        ":status": {"S": status},
+        ":updated_at": {"S": updated_at},
+    }
+
+    optional_fields = [
+        ("run_id", run_id),
+        ("bucket", bucket_name),
+        ("source_key", source_key),
+        ("metadata_key", metadata_key),
+        ("start_date", start_date),
+        ("end_date", end_date),
+        ("error_message", error_message),
+    ]
+    for field_name, field_value in optional_fields:
+        if field_value is None:
+            continue
+        placeholder_name = f"#{field_name}"
+        placeholder_value = f":{field_name}"
+        update_parts.append(f"{placeholder_name} = {placeholder_value}")
+        expression_attribute_names[placeholder_name] = field_name
+        expression_attribute_values[placeholder_value] = {"S": field_value}
+
+    dynamodb_client.update_item(
+        TableName=table_name,
+        Key={"key": {"S": batch_id}},
+        UpdateExpression=f"SET {', '.join(update_parts)}",
+        ExpressionAttributeNames=expression_attribute_names,
+        ExpressionAttributeValues=expression_attribute_values,
+    )
+
+
 def main() -> None:
     args = resolve_job_args()
 
@@ -58,60 +110,59 @@ def main() -> None:
     s3_client = boto3.client("s3")
     dynamodb_client = boto3.client("dynamodb")
 
-    csv_bytes = download_csv(presigned_url)
-    s3_client.put_object(
-        Bucket=bucket_name,
-        Key=source_key,
-        Body=csv_bytes,
-        ContentType="text/csv",
-    )
+    try:
+        csv_bytes = download_csv(presigned_url)
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=source_key,
+            Body=csv_bytes,
+            ContentType="text/csv",
+        )
 
-    metadata = {
-        "batch_id": batch_id,
-        "run_id": run_id,
-        "source": "adscribe",
-        "start_date": start_date,
-        "end_date": end_date,
-        "bucket": bucket_name,
-        "source_key": source_key,
-        "ingested_at": ingested_at,
-    }
-    s3_client.put_object(
-        Bucket=bucket_name,
-        Key=metadata_key,
-        Body=json.dumps(metadata, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
+        metadata = {
+            "batch_id": batch_id,
+            "run_id": run_id,
+            "source": "adscribe",
+            "start_date": start_date,
+            "end_date": end_date,
+            "bucket": bucket_name,
+            "source_key": source_key,
+            "ingested_at": ingested_at,
+        }
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=metadata_key,
+            Body=json.dumps(metadata, indent=2).encode("utf-8"),
+            ContentType="application/json",
+        )
 
-    dynamodb_client.update_item(
-        TableName=table_name,
-        Key={"key": {"S": batch_id}},
-        UpdateExpression=(
-            "SET #status = :status, #run_id = :run_id, #bucket = :bucket, "
-            "#source_key = :source_key, #metadata_key = :metadata_key, "
-            "#start_date = :start_date, #end_date = :end_date, #updated_at = :updated_at"
-        ),
-        ExpressionAttributeNames={
-            "#status": "status",
-            "#run_id": "run_id",
-            "#bucket": "bucket",
-            "#source_key": "source_key",
-            "#metadata_key": "metadata_key",
-            "#start_date": "start_date",
-            "#end_date": "end_date",
-            "#updated_at": "updated_at",
-        },
-        ExpressionAttributeValues={
-            ":status": {"S": "RAW_LANDED"},
-            ":run_id": {"S": run_id},
-            ":bucket": {"S": bucket_name},
-            ":source_key": {"S": source_key},
-            ":metadata_key": {"S": metadata_key},
-            ":start_date": {"S": start_date},
-            ":end_date": {"S": end_date},
-            ":updated_at": {"S": ingested_at},
-        },
-    )
+        update_batch_status(
+            dynamodb_client,
+            table_name,
+            batch_id,
+            status="RAW_LANDED",
+            updated_at=ingested_at,
+            run_id=run_id,
+            bucket_name=bucket_name,
+            source_key=source_key,
+            metadata_key=metadata_key,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except Exception as exc:
+        failure_timestamp = datetime.now(timezone.utc).isoformat()
+        try:
+            update_batch_status(
+                dynamodb_client,
+                table_name,
+                batch_id,
+                status="FAILED",
+                updated_at=failure_timestamp,
+                error_message=str(exc)[:1000],
+            )
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

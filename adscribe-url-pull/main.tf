@@ -23,6 +23,8 @@ module "adscribe_url_pull_lambda" {
     LOOKBACK_DAYS        = "3"
     MAX_RANGE_DAYS       = "7"
     HTTP_TIMEOUT_SECONDS = "30"
+    DYNAMODB_TABLE       = "kdu-flux-dynamodb-table-de"
+    STEP_FUNCTION_ARN    = aws_sfn_state_machine.adscribe_raw_landing.arn
   }
   tags = local.common_tags
 }
