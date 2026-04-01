@@ -6,9 +6,9 @@ locals {
   table_name = "${var.creator}-${var.dynamodb_table_name}"
 
   common_tags = {
-    Name        = "${var.creator}-DE"
-    Creator     = var.creator
-    Purpose     = var.purpose
+    Name    = "${var.creator}-DE"
+    Creator = var.creator
+    Purpose = var.purpose
   }
 }
 
