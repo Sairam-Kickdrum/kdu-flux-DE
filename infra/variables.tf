@@ -55,3 +55,76 @@ variable "dynamodb_enable_point_in_time_recovery" {
   type        = bool
   default     = true
 }
+
+variable "sqs_queue_name" {
+  description = "SQS queue name"
+  type        = string
+}
+
+variable "sqs_visibility_timeout_seconds" {
+  description = "Visibility timeout for the SQS queue in seconds"
+  type        = number
+  default     = 120
+}
+
+variable "sqs_message_retention_seconds" {
+  description = "Message retention period for the SQS queue in seconds"
+  type        = number
+  default     = 345600
+}
+
+variable "sqs_receive_wait_time_seconds" {
+  description = "Long polling wait time for ReceiveMessage in seconds"
+  type        = number
+  default     = 20
+}
+
+variable "lambda_function_name" {
+  description = "Lambda function name"
+  type        = string
+}
+
+variable "lambda_runtime" {
+  description = "Runtime for the Lambda function"
+  type        = string
+}
+
+variable "lambda_handler" {
+  description = "Handler for the Lambda function"
+  type        = string
+}
+
+variable "lambda_timeout" {
+  description = "Timeout for the Lambda function in seconds"
+  type        = number
+  default     = 60
+}
+
+variable "lambda_memory_size" {
+  description = "Memory size for the Lambda function in MB"
+  type        = number
+  default     = 256
+}
+
+variable "lambda_sqs_batch_size" {
+  description = "Number of SQS messages sent to Lambda per invocation"
+  type        = number
+  default     = 10
+}
+
+variable "step_function_state_machine_arn" {
+  description = "Step Functions state machine ARN to start from Lambda"
+  type        = string
+}
+
+variable "client_upload_client_names" {
+  description = "Client names used for S3 placeholder prefixes under raw/client_uploads"
+  type        = list(string)
+  default     = ["alpha", "beta", "gamma"]
+}
+
+variable "s3_upload_trigger_prefix" {
+  description = "S3 prefix filter for upload trigger notifications sent to SQS"
+  type        = string
+  default     = "raw/client_uploads/"
+}
