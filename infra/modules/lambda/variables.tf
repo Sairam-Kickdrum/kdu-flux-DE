@@ -52,6 +52,17 @@ variable "step_function_state_machine_arn" {
   type        = string
 }
 
+variable "source_bucket_arn" {
+  description = "ARN of the source S3 bucket Lambda needs to inspect"
+  type        = string
+}
+
+variable "environment_variables" {
+  description = "Environment variables for Lambda function"
+  type        = map(string)
+  default     = {}
+}
+
 variable "tags" {
   description = "Tags for the Lambda resources"
   type        = map(string)
