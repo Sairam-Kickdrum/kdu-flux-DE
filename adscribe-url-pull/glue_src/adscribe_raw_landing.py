@@ -10,12 +10,28 @@ import boto3
 
 def resolve_job_args() -> dict[str, str]:
     args: dict[str, str] = {}
-    for raw_arg in sys.argv[1:]:
-        if not raw_arg.startswith("--") or "=" not in raw_arg:
+    raw_args = sys.argv[1:]
+    index = 0
+
+    while index < len(raw_args):
+        raw_arg = raw_args[index]
+        if not raw_arg.startswith("--"):
+            index += 1
             continue
 
-        key, value = raw_arg[2:].split("=", 1)
-        args[key] = value
+        if "=" in raw_arg:
+            key, value = raw_arg[2:].split("=", 1)
+            args[key] = value
+            index += 1
+            continue
+
+        next_index = index + 1
+        if next_index < len(raw_args) and not raw_args[next_index].startswith("--"):
+            args[raw_arg[2:]] = raw_args[next_index]
+            index += 2
+            continue
+
+        index += 1
 
     required = ["batch_id", "start_date", "end_date", "presigned_url", "run_id"]
     missing = [key for key in required if not args.get(key)]
