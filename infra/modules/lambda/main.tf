@@ -65,6 +65,22 @@ resource "aws_iam_role_policy" "this" {
         Resource = var.dynamodb_table_arn
       },
       {
+        Sid    = "AllowS3ReadForReadinessChecks"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = var.source_bucket_arn
+      },
+      {
+        Sid    = "AllowS3ObjectReadForReadinessChecks"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "${var.source_bucket_arn}/*"
+      },
+      {
         Sid      = "AllowStepFunctionsStartExecution"
         Effect   = "Allow"
         Action   = "states:StartExecution"
@@ -83,6 +99,10 @@ resource "aws_lambda_function" "this" {
   source_code_hash = filebase64sha256(local.lambda_package_file)
   timeout          = var.timeout
   memory_size      = var.memory_size
+
+  environment {
+    variables = var.environment_variables
+  }
 
   tags = var.tags
 }

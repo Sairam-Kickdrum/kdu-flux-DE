@@ -94,6 +94,12 @@ variable "lambda_handler" {
   type        = string
 }
 
+variable "lambda_package_file" {
+  description = "Path to the Lambda deployment package zip file"
+  type        = string
+  default     = "../pipeline/lambda/dist/client_upload_orchestrator.zip"
+}
+
 variable "lambda_timeout" {
   description = "Timeout for the Lambda function in seconds"
   type        = number
@@ -112,9 +118,63 @@ variable "lambda_sqs_batch_size" {
   default     = 10
 }
 
-variable "step_function_state_machine_arn" {
-  description = "Step Functions state machine ARN to start from Lambda"
+variable "pipeline_config_s3_key" {
+  description = "S3 object key for the client pipeline config"
   type        = string
+  default     = "pipeline/config/client_pipeline_config.json"
+}
+
+variable "glue_script_s3_key" {
+  description = "S3 object key for the Glue ETL script"
+  type        = string
+  default     = "pipeline/glue/client_upload_etl.py"
+}
+
+variable "glue_temp_dir_prefix" {
+  description = "S3 prefix for Glue temporary files"
+  type        = string
+  default     = "pipeline/glue/tmp/"
+}
+
+variable "glue_job_name" {
+  description = "Glue job name"
+  type        = string
+}
+
+variable "glue_job_iam_role_name" {
+  description = "IAM role name for Glue job"
+  type        = string
+}
+
+variable "step_function_state_machine_name" {
+  description = "Step Functions state machine name"
+  type        = string
+}
+
+variable "step_function_iam_role_name" {
+  description = "IAM role name for Step Functions"
+  type        = string
+}
+
+variable "redshift_jdbc_url" {
+  description = "Redshift JDBC URL"
+  type        = string
+}
+
+variable "redshift_table" {
+  description = "Redshift target table"
+  type        = string
+}
+
+variable "redshift_user" {
+  description = "Redshift username"
+  type        = string
+}
+
+variable "redshift_password" {
+  description = "Redshift password"
+  type        = string
+  sensitive   = true
 }
 
 variable "client_upload_client_names" {

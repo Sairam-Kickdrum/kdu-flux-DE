@@ -33,3 +33,23 @@ output "lambda_function_name" {
 output "lambda_function_arn" {
   value = module.lambda.function_arn
 }
+
+output "glue_job_name" {
+  value = module.glue_job.job_name
+}
+
+output "glue_job_arn" {
+  value = module.glue_job.job_arn
+}
+
+output "step_function_name" {
+  value = module.step_function.state_machine_name
+}
+
+output "step_function_arn" {
+  value = module.step_function.state_machine_arn
+}
+
+output "pipeline_config_s3_uri" {
+  value = "s3://${module.bucket.bucket_name}/${aws_s3_object.pipeline_config.key}"
+}
