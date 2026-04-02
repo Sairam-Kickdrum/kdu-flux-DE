@@ -54,7 +54,10 @@ resource "aws_iam_role_policy" "adscribe_glue" {
         ]
         Resource = [
           "${data.aws_s3_bucket.adscribe.arn}/${var.adscribe_glue_script_s3_key}",
-          "${data.aws_s3_bucket.adscribe.arn}/raw/adscribe/*"
+          "${data.aws_s3_bucket.adscribe.arn}/raw/adscribe/*",
+          "${data.aws_s3_bucket.adscribe.arn}/processed/adscribe/*",
+          "${data.aws_s3_bucket.adscribe.arn}/quarantine/adscribe/*",
+          "${data.aws_s3_bucket.adscribe.arn}/pipeline/config/adscribe_pipeline_config.json"
         ]
       },
       {
