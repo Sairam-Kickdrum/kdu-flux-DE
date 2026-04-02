@@ -1,0 +1,72 @@
+{
+  "Comment": "Client upload orchestration. Glue job performs transformation, processed/quarantine writes, and Redshift load.",
+  "StartAt": "Validate Input",
+  "States": {
+    "Validate Input": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.client_id", "IsPresent": true },
+            { "Variable": "$.bucket", "IsPresent": true },
+            { "Variable": "$.files", "IsPresent": true },
+            { "Variable": "$.config_s3_uri", "IsPresent": true },
+            { "Variable": "$.batch_idempotency_key", "IsPresent": true }
+          ],
+          "Next": "Prepare ETL Input"
+        }
+      ],
+      "Default": "Invalid Input"
+    },
+    "Invalid Input": {
+      "Type": "Fail",
+      "Error": "InvalidInput",
+      "Cause": "Missing one or more required fields for ETL orchestration."
+    },
+    "Prepare ETL Input": {
+      "Type": "Pass",
+      "Parameters": {
+        "client_id.$": "$.client_id",
+        "bucket.$": "$.bucket",
+        "files.$": "$.files",
+        "config_s3_uri.$": "$.config_s3_uri",
+        "batch_id.$": "$.batch_idempotency_key"
+      },
+      "Next": "Start Glue Job (Sync)"
+    },
+    "Start Glue Job (Sync)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${glue_job_name}",
+        "Arguments": {
+          "--CLIENT_ID.$": "$.client_id",
+          "--SOURCE_BUCKET.$": "$.bucket",
+          "--FILES_JSON.$": "States.JsonToString($.files)",
+          "--CONFIG_S3_URI.$": "$.config_s3_uri",
+          "--BATCH_ID.$": "$.batch_id",
+          "--REDSHIFT_JDBC_URL": "${redshift_jdbc_url}",
+          "--REDSHIFT_TABLE": "${redshift_table}",
+          "--REDSHIFT_USER": "${redshift_user}",
+          "--REDSHIFT_PASSWORD": "${redshift_password}"
+        }
+      },
+      "Next": "Success",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "ETL Failed"
+        }
+      ]
+    },
+    "ETL Failed": {
+      "Type": "Fail",
+      "Error": "GlueOrLoadFailed",
+      "Cause": "Glue transformation/output validation/Redshift load failed."
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}

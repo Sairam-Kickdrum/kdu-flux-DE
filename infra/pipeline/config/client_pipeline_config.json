@@ -1,0 +1,192 @@
+{
+  "version": "1.0.0",
+  "common_schema": [
+    "event_date",
+    "client_id",
+    "discount_code",
+    "show_name",
+    "revenue",
+    "orders",
+    "new_orders",
+    "lapsed_orders",
+    "active_orders",
+    "ingestion_ts",
+    "source_batch_id"
+  ],
+  "clients": {
+    "alpha": {
+      "client_id": "alpha",
+      "required_files": [
+        {
+          "file_type": "codes",
+          "patterns": [
+            "*codes*.csv",
+            "creator_alpha_codes.csv"
+          ]
+        },
+        {
+          "file_type": "orders",
+          "patterns": [
+            "*orders*.csv",
+            "creator_alpha_orders.csv"
+          ]
+        }
+      ],
+      "joins": [
+        {
+          "left_file_type": "orders",
+          "right_file_type": "codes",
+          "left_key": "code",
+          "right_key": "code",
+          "join_type": "left",
+          "normalize_case": true,
+          "quarantine_on_miss": true
+        }
+      ],
+      "column_mappings": {
+        "orders": {
+          "order_date": "event_date",
+          "code": "discount_code",
+          "subtotal_price": "revenue"
+        },
+        "codes": {
+          "code": "code",
+          "discount_code": "discount_code"
+        }
+      },
+      "transformations": [
+        "clean_dates",
+        "clean_currency",
+        "trim_text",
+        "alpha_lowercase_code_join",
+        "aggregate_alpha_by_date_discount_code"
+      ],
+      "output": {
+        "processed_prefix_pattern": "processed/client_uploads/{client_id}/{year}/{month}/{day}/",
+        "quarantine_prefix_pattern": "quarantine/client_uploads/{client_id}/{year}/{month}/{day}/",
+        "redshift_target": {
+          "table": "fact_client_uploads",
+          "mode": "append"
+        }
+      }
+    },
+    "beta": {
+      "client_id": "beta",
+      "required_files": [
+        {
+          "file_type": "sales",
+          "patterns": [
+            "*sales*.csv",
+            "creator_beta_sales.csv"
+          ]
+        },
+        {
+          "file_type": "shows_and_codes",
+          "patterns": [
+            "*shows_and_codes*.csv",
+            "creator_beta_shows_and_codes.csv"
+          ]
+        }
+      ],
+      "joins": [
+        {
+          "left_file_type": "sales",
+          "right_file_type": "shows_and_codes",
+          "left_key": "show",
+          "right_key": "show",
+          "join_type": "left",
+          "normalize_case": true,
+          "quarantine_on_miss": true
+        }
+      ],
+      "column_mappings": {
+        "sales": {
+          "date": "event_date",
+          "show": "show_name",
+          "sales": "revenue",
+          "orders": "orders",
+          "new": "new_value",
+          "lapsed": "lapsed_value",
+          "active": "active_value"
+        },
+        "shows_and_codes": {
+          "show": "show_name",
+          "discount_code": "discount_code"
+        }
+      },
+      "transformations": [
+        "clean_dates",
+        "clean_currency",
+        "trim_text",
+        "beta_split_new_lapsed_active_orders",
+        "aggregate_beta_by_date_discount_code"
+      ],
+      "output": {
+        "processed_prefix_pattern": "processed/client_uploads/{client_id}/{year}/{month}/{day}/",
+        "quarantine_prefix_pattern": "quarantine/client_uploads/{client_id}/{year}/{month}/{day}/",
+        "redshift_target": {
+          "table": "fact_client_uploads",
+          "mode": "append"
+        }
+      }
+    },
+    "gamma": {
+      "client_id": "gamma",
+      "required_files": [
+        {
+          "file_type": "sales",
+          "patterns": [
+            "*sales*.csv",
+            "creator_gamma_sales.csv"
+          ]
+        },
+        {
+          "file_type": "salesforce_data",
+          "patterns": [
+            "*salesforce_data*.csv",
+            "salesforce_data_client3.csv"
+          ]
+        }
+      ],
+      "joins": [
+        {
+          "left_file_type": "sales",
+          "right_file_type": "salesforce_data",
+          "left_key": "id",
+          "right_key": "id",
+          "join_type": "left",
+          "normalize_case": false,
+          "quarantine_on_miss": true
+        }
+      ],
+      "column_mappings": {
+        "sales": {
+          "date": "event_date",
+          "show": "show_name",
+          "sales": "revenue",
+          "orders": "orders",
+          "id": "id"
+        },
+        "salesforce_data": {
+          "id": "id",
+          "discount_code": "discount_code"
+        }
+      },
+      "transformations": [
+        "clean_dates",
+        "clean_currency",
+        "trim_text",
+        "gamma_salesforce_join",
+        "aggregate_gamma_by_date_discount_code"
+      ],
+      "output": {
+        "processed_prefix_pattern": "processed/client_uploads/{client_id}/{year}/{month}/{day}/",
+        "quarantine_prefix_pattern": "quarantine/client_uploads/{client_id}/{year}/{month}/{day}/",
+        "redshift_target": {
+          "table": "fact_client_uploads",
+          "mode": "append"
+        }
+      }
+    }
+  }
+}
