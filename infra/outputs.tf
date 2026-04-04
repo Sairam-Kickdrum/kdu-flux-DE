@@ -53,3 +53,7 @@ output "step_function_arn" {
 output "pipeline_config_s3_uri" {
   value = "s3://${module.bucket.bucket_name}/${aws_s3_object.pipeline_config.key}"
 }
+
+output "redshift_s3_access_role_arn" {
+  value = aws_iam_role.redshift_s3_access.arn
+}

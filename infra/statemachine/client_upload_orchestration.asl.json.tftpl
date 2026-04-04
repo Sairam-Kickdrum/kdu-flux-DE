@@ -1,54 +1,14 @@
 {
-  "Comment": "Client upload orchestration. Glue job performs transformation, processed/quarantine writes, and Redshift load.",
-  "StartAt": "Validate Input",
+  "Comment": "Minimal pass-through orchestration: Step Functions sends full Lambda input to Glue.",
+  "StartAt": "Start Glue Job (Sync)",
   "States": {
-    "Validate Input": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "And": [
-            { "Variable": "$.client_id", "IsPresent": true },
-            { "Variable": "$.bucket", "IsPresent": true },
-            { "Variable": "$.files", "IsPresent": true },
-            { "Variable": "$.config_s3_uri", "IsPresent": true },
-            { "Variable": "$.batch_idempotency_key", "IsPresent": true }
-          ],
-          "Next": "Prepare ETL Input"
-        }
-      ],
-      "Default": "Invalid Input"
-    },
-    "Invalid Input": {
-      "Type": "Fail",
-      "Error": "InvalidInput",
-      "Cause": "Missing one or more required fields for ETL orchestration."
-    },
-    "Prepare ETL Input": {
-      "Type": "Pass",
-      "Parameters": {
-        "client_id.$": "$.client_id",
-        "bucket.$": "$.bucket",
-        "files.$": "$.files",
-        "config_s3_uri.$": "$.config_s3_uri",
-        "batch_id.$": "$.batch_idempotency_key"
-      },
-      "Next": "Start Glue Job (Sync)"
-    },
     "Start Glue Job (Sync)": {
       "Type": "Task",
       "Resource": "arn:aws:states:::glue:startJobRun.sync",
       "Parameters": {
         "JobName": "${glue_job_name}",
         "Arguments": {
-          "--CLIENT_ID.$": "$.client_id",
-          "--SOURCE_BUCKET.$": "$.bucket",
-          "--FILES_JSON.$": "States.JsonToString($.files)",
-          "--CONFIG_S3_URI.$": "$.config_s3_uri",
-          "--BATCH_ID.$": "$.batch_id",
-          "--REDSHIFT_JDBC_URL": "${redshift_jdbc_url}",
-          "--REDSHIFT_TABLE": "${redshift_table}",
-          "--REDSHIFT_USER": "${redshift_user}",
-          "--REDSHIFT_PASSWORD": "${redshift_password}"
+          "--EVENT_INPUT.$": "States.JsonToString($)"
         }
       },
       "Next": "Success",
@@ -56,14 +16,14 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.error",
-          "Next": "ETL Failed"
+          "Next": "Glue Failed"
         }
       ]
     },
-    "ETL Failed": {
+    "Glue Failed": {
       "Type": "Fail",
-      "Error": "GlueOrLoadFailed",
-      "Cause": "Glue transformation/output validation/Redshift load failed."
+      "Error": "GlueJobFailed",
+      "Cause": "Glue execution failed."
     },
     "Success": {
       "Type": "Succeed"

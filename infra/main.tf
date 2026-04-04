@@ -1,3 +1,66 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+resource "aws_iam_role" "redshift_s3_access" {
+  name = var.redshift_s3_access_role_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = [
+            "redshift.amazonaws.com",
+            "redshift-serverless.amazonaws.com"
+          ]
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name    = var.redshift_s3_access_role_name
+    Project = var.project_name
+    Purpose = "Redshift-S3-Access"
+  }
+}
+
+resource "aws_iam_role_policy" "redshift_s3_access" {
+  name = "${var.redshift_s3_access_role_name}-policy"
+  role = aws_iam_role.redshift_s3_access.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowBucketList"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = module.bucket.bucket_arn
+      },
+      {
+        Sid    = "AllowObjectReadWriteForPipelinePrefixes"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          "${module.bucket.bucket_arn}/processed/*",
+          "${module.bucket.bucket_arn}/quarantine/*",
+          "${module.bucket.bucket_arn}/raw/*"
+        ]
+      }
+    ]
+  })
+}
+
 module "bucket" {
   source = "./modules/s3_bucket"
 
@@ -54,16 +117,34 @@ resource "aws_s3_object" "client_upload_prefix_placeholders" {
 resource "aws_s3_object" "pipeline_config" {
   bucket       = module.bucket.bucket_name
   key          = var.pipeline_config_s3_key
-  source       = "${path.root}/../pipeline/config/client_pipeline_config.json"
-  etag         = filemd5("${path.root}/../pipeline/config/client_pipeline_config.json")
+  source       = "${path.root}/pipeline/config/client_pipeline_config.json"
+  etag         = filemd5("${path.root}/pipeline/config/client_pipeline_config.json")
+  content_type = "application/json"
+}
+
+locals {
+  client_transform_config_files = {
+    alpha = "${path.root}/pipeline/config/client=alpha/v1.json"
+    beta  = "${path.root}/pipeline/config/client=beta/v1.json"
+    gamma = "${path.root}/pipeline/config/client=gamma/v1.json"
+  }
+}
+
+resource "aws_s3_object" "client_transform_config" {
+  for_each = local.client_transform_config_files
+
+  bucket       = module.bucket.bucket_name
+  key          = "${var.client_transform_config_base_prefix}/client=${each.key}/${var.client_transform_config_version_file}"
+  source       = each.value
+  etag         = filemd5(each.value)
   content_type = "application/json"
 }
 
 resource "aws_s3_object" "glue_script" {
   bucket       = module.bucket.bucket_name
   key          = var.glue_script_s3_key
-  source       = "${path.root}/../pipeline/glue/jobs/client_upload_etl.py"
-  etag         = filemd5("${path.root}/../pipeline/glue/jobs/client_upload_etl.py")
+  source       = "${path.root}/pipeline/glue/jobs/client_upload_etl.py"
+  etag         = filemd5("${path.root}/pipeline/glue/jobs/client_upload_etl.py")
   content_type = "text/x-python"
 }
 
@@ -75,6 +156,14 @@ module "glue_job" {
   bucket_arn      = module.bucket.bucket_arn
   script_location = "s3://${module.bucket.bucket_name}/${aws_s3_object.glue_script.key}"
   temp_dir        = "s3://${module.bucket.bucket_name}/${var.glue_temp_dir_prefix}"
+  default_arguments = {
+    "--CONFIG_BASE_PREFIX"  = var.client_transform_config_base_prefix
+    "--CONFIG_VERSION_FILE" = var.client_transform_config_version_file
+    "--REDSHIFT_JDBC_URL"   = var.redshift_jdbc_url
+    "--REDSHIFT_TABLE"      = var.redshift_table
+    "--REDSHIFT_USER"       = var.redshift_user
+    "--REDSHIFT_PASSWORD"   = var.redshift_password
+  }
 
   tags = {
     Name    = var.glue_job_name
@@ -84,14 +173,12 @@ module "glue_job" {
 }
 
 locals {
+  step_function_arn = "arn:aws:states:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:stateMachine:${var.step_function_state_machine_name}"
+
   step_function_definition = templatefile(
-    "${path.root}/../statemachine/client_upload_orchestration.asl.json.tftpl",
+    "${path.root}/statemachine/client_upload_orchestration.asl.json.tftpl",
     {
-      glue_job_name     = module.glue_job.job_name
-      redshift_jdbc_url = var.redshift_jdbc_url
-      redshift_table    = var.redshift_table
-      redshift_user     = var.redshift_user
-      redshift_password = var.redshift_password
+      glue_job_name = module.glue_job.job_name
     }
   )
 }
@@ -123,11 +210,11 @@ module "lambda" {
   sqs_queue_arn                   = module.sqs.queue_arn
   sqs_batch_size                  = var.lambda_sqs_batch_size
   dynamodb_table_arn              = module.dynamodb.table_arn
-  step_function_state_machine_arn = module.step_function.state_machine_arn
+  step_function_state_machine_arn = local.step_function_arn
   source_bucket_arn               = module.bucket.bucket_arn
   environment_variables = {
     IDEMPOTENCY_TABLE_NAME = module.dynamodb.table_name
-    STEP_FUNCTION_ARN      = module.step_function.state_machine_arn
+    STEP_FUNCTION_ARN      = local.step_function_arn
     SOURCE_BUCKET_NAME     = module.bucket.bucket_name
     CONFIG_S3_URI          = "s3://${module.bucket.bucket_name}/${aws_s3_object.pipeline_config.key}"
     PIPELINE_CONFIG_PATH   = "config/client_pipeline_config.json"

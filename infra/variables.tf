@@ -124,6 +124,18 @@ variable "pipeline_config_s3_key" {
   default     = "pipeline/config/client_pipeline_config.json"
 }
 
+variable "client_transform_config_base_prefix" {
+  description = "S3 prefix where per-client transformation configs are stored"
+  type        = string
+  default     = "config"
+}
+
+variable "client_transform_config_version_file" {
+  description = "Config version file name for each client config"
+  type        = string
+  default     = "v1.json"
+}
+
 variable "glue_script_s3_key" {
   description = "S3 object key for the Glue ETL script"
   type        = string
@@ -154,6 +166,12 @@ variable "step_function_state_machine_name" {
 variable "step_function_iam_role_name" {
   description = "IAM role name for Step Functions"
   type        = string
+}
+
+variable "redshift_s3_access_role_name" {
+  description = "IAM role name used by Redshift to access S3 pipeline data"
+  type        = string
+  default     = "kdu-flux-redshift-s3-access-role-de"
 }
 
 variable "redshift_jdbc_url" {

@@ -1,0 +1,252 @@
+{
+  "pipeline": {
+    "name": "viewstack",
+    "schema_version": "v1"
+  },
+  "client": {
+    "id": "gamma",
+    "description": "Sales joined to Salesforce lookup on id, then aggregated by date and discount_code."
+  },
+  "source_format": "csv",
+  "partition_column": "date",
+  "date_column": "date",
+  "rename_columns": {
+    "id": "id",
+    "sale_date": "date_raw",
+    "value_eur": "revenue_raw",
+    "item_id": "item_id",
+    "units": "orders_raw",
+    "code": "discount_code"
+  },
+  "cleaning_rules": {
+    "id": "trim",
+    "discount_code": "lowercase"
+  },
+  "joins": [
+    {
+      "name": "sales_to_salesforce",
+      "path": "s3://kdu-spark-s3-data-lake-dev-743298171118/raw/client=gamma/file_type=salesforce/",
+      "format": "csv",
+      "keys": [
+        "id"
+      ],
+      "column_mapping": {
+        "id": "id",
+        "account_ref": "account_ref",
+        "ref_name": "ref_name"
+      },
+      "how": "left",
+      "normalization": {
+        "trim": true,
+        "lowercase": false
+      },
+      "quarantine_on_unmatched": true,
+      "quarantine_reason": "unmatched_id_in_salesforce"
+    }
+  ],
+  "transformations": {
+    "cast_columns": {},
+    "fill_nulls": {},
+    "derived_columns": [
+      {
+        "name": "date",
+        "expression": "COALESCE(\n  to_date(date_raw, 'yyyy-MM-dd'),\n  to_date(date_raw, 'dd-MM-yyyy'),\n  to_date(date_raw, 'dd/MM/yyyy'),\n  to_date(date_raw, 'MM/dd/yyyy'),\n  to_date(date_raw)\n)\n"
+      },
+      {
+        "name": "revenue",
+        "expression": "CAST(regexp_replace(regexp_replace(trim(revenue_raw), ',', '.'), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "orders",
+        "expression": "CAST(regexp_replace(trim(orders_raw), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "client_id",
+        "expression": "'gamma'"
+      }
+    ],
+    "filter_expressions": [
+      "date IS NOT NULL",
+      "id IS NOT NULL",
+      "discount_code IS NOT NULL",
+      "revenue IS NOT NULL",
+      "orders IS NOT NULL"
+    ]
+  },
+  "drop_columns": [],
+  "aggregation": {
+    "group_by": [
+      "date",
+      "discount_code"
+    ],
+    "metrics": [
+      {
+        "column": "revenue",
+        "function": "sum",
+        "alias": "revenue"
+      },
+      {
+        "column": "orders",
+        "function": "sum",
+        "alias": "orders"
+      }
+    ]
+  },
+  "gold_aggregations": {
+    "group_by": [
+      "date",
+      "discount_code"
+    ],
+    "metrics": [
+      {
+        "column": "revenue",
+        "function": "sum",
+        "alias": "revenue"
+      },
+      {
+        "column": "orders",
+        "function": "sum",
+        "alias": "orders"
+      }
+    ]
+  },
+  "common_cleaning": {
+    "date_parsing_rules": {
+      "target_column": "date",
+      "accepted_formats": [
+        "yyyy-MM-dd",
+        "dd-MM-yyyy",
+        "dd/MM/yyyy",
+        "MM/dd/yyyy"
+      ]
+    },
+    "numeric_cleaning": {
+      "target_columns": [
+        "revenue_raw",
+        "orders_raw"
+      ],
+      "remove_currency_symbols": true,
+      "remove_thousands_separators": true,
+      "normalize_decimal_separator": "."
+    },
+    "text_normalization": {
+      "trim_columns": [
+        "id",
+        "discount_code",
+        "item_id"
+      ],
+      "lowercase_columns": [
+        "discount_code"
+      ]
+    },
+    "missing_value_strategy": {
+      "drop_rows_when_missing": [
+        "date_raw",
+        "id",
+        "discount_code",
+        "orders_raw"
+      ]
+    }
+  },
+  "quarantine_rules": [
+    {
+      "name": "unmatched_salesforce",
+      "condition": "account_ref IS NULL",
+      "reason": "unmatched_id_in_salesforce"
+    }
+  ],
+  "post_processing": {
+    "column_renaming": {
+      "discount_code": "discount_code",
+      "orders": "orders",
+      "revenue": "revenue",
+      "order_date": "order_date",
+      "client_name": "client_name"
+    },
+    "sorting_rules": [
+      {
+        "column": "date",
+        "direction": "asc"
+      },
+      {
+        "column": "discount_code",
+        "direction": "asc"
+      }
+    ],
+    "filtering_rules": [
+      "discount_code IS NOT NULL"
+    ]
+  },
+  "outputs": {
+    "loaded_path": "s3://kdu-spark-s3-data-lake-dev-743298171118/processed/client=gamma/",
+    "quarantine_path": "s3://kdu-spark-s3-data-lake-dev-743298171118/quarantine/client=gamma/",
+    "loaded_schema": [
+      {
+        "name": "discount_code",
+        "type": "string"
+      },
+      {
+        "name": "orders",
+        "type": "bigint"
+      },
+      {
+        "name": "revenue",
+        "type": "double"
+      },
+      {
+        "name": "order_date",
+        "type": "date"
+      },
+      {
+        "name": "client_name",
+        "type": "string"
+      }
+    ],
+    "quarantine_schema": [
+      {
+        "name": "id",
+        "type": "string"
+      },
+      {
+        "name": "date_raw",
+        "type": "string"
+      },
+      {
+        "name": "item_id",
+        "type": "string"
+      },
+      {
+        "name": "discount_code",
+        "type": "string"
+      },
+      {
+        "name": "revenue_raw",
+        "type": "string"
+      },
+      {
+        "name": "orders_raw",
+        "type": "string"
+      },
+      {
+        "name": "account_ref",
+        "type": "string"
+      },
+      {
+        "name": "ref_name",
+        "type": "string"
+      },
+      {
+        "name": "quarantine_reason",
+        "type": "string"
+      },
+      {
+        "name": "client_id",
+        "type": "string"
+      }
+    ]
+  },
+  "required_files": [
+    "creator_gamma_sales.csv",
+    "salesforce_data_client3.csv"
+  ]
+}
