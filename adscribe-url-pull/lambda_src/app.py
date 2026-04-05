@@ -6,6 +6,9 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from urllib import error, request
 
+import boto3
+from botocore.exceptions import ClientError
+
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
@@ -16,6 +19,11 @@ API_URL = os.environ["ADSCRIBE_API_URL"]
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "3"))
 MAX_RANGE_DAYS = int(os.getenv("MAX_RANGE_DAYS", "7"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
+DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
+STEP_FUNCTION_ARN = os.environ["STEP_FUNCTION_ARN"]
+
+DYNAMODB_CLIENT = boto3.client("dynamodb")
+STEP_FUNCTIONS_CLIENT = boto3.client("stepfunctions")
 
 
 def resolve_current_date(event: dict | None) -> date:
@@ -105,6 +113,63 @@ def request_presigned_url(payload: dict[str, str]) -> tuple[int, dict]:
     return status_code, parsed_body
 
 
+def build_run_id() -> str:
+    return f"ads_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+
+
+def reserve_batch(
+    batch_id: str,
+    start_date: str,
+    end_date: str,
+    run_id: str,
+    timestamp: str,
+) -> bool:
+    try:
+        DYNAMODB_CLIENT.put_item(
+            TableName=DYNAMODB_TABLE,
+            Item={
+                "key": {"S": batch_id},
+                "source_type": {"S": "adscribe"},
+                "client_name": {"S": "adscribe"},
+                "status": {"S": "RECEIVED"},
+                "start_date": {"S": start_date},
+                "end_date": {"S": end_date},
+                "run_id": {"S": run_id},
+                "created_at": {"S": timestamp},
+                "updated_at": {"S": timestamp},
+            },
+            ConditionExpression="attribute_not_exists(#k)",
+            ExpressionAttributeNames={"#k": "key"},
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def start_raw_landing_execution(
+    batch_id: str,
+    start_date: str,
+    end_date: str,
+    presigned_url: str,
+    run_id: str,
+) -> dict[str, str]:
+    return STEP_FUNCTIONS_CLIENT.start_execution(
+        stateMachineArn=STEP_FUNCTION_ARN,
+        name=run_id.replace("_", "-"),
+        input=json.dumps(
+            {
+                "batch_id": batch_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "presigned_url": presigned_url,
+                "run_id": run_id,
+            }
+        ),
+    )
+
+
 def lambda_handler(event: dict | None, _context: object) -> dict[str, object]:
     LOGGER.info("Received event: %s", json.dumps(event or {}))
 
@@ -130,7 +195,53 @@ def lambda_handler(event: dict | None, _context: object) -> dict[str, object]:
             ),
         }
 
+    start_date = response_body["start_date"]
+    end_date = response_body["end_date"]
+    presigned_url = response_body["download_url"]
+    batch_id = f"ADSCRIBE#{start_date}#{end_date}"
+    run_id = build_run_id()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    try:
+        is_new_batch = reserve_batch(batch_id, start_date, end_date, run_id, timestamp)
+        if not is_new_batch:
+            return {
+                "statusCode": 200,
+                "body": json.dumps(
+                    {
+                        "message": "duplicate batch skipped",
+                        "batch_id": batch_id,
+                    }
+                ),
+            }
+
+        execution_response = start_raw_landing_execution(
+            batch_id=batch_id,
+            start_date=start_date,
+            end_date=end_date,
+            presigned_url=presigned_url,
+            run_id=run_id,
+        )
+    except Exception as exc:
+        LOGGER.exception("Failed to reserve batch or start Step Functions execution.")
+        return {
+            "statusCode": 500,
+            "body": json.dumps(
+                {
+                    "message": "Failed to reserve Adscribe batch or start raw landing workflow.",
+                    "details": str(exc),
+                }
+            ),
+        }
+
     return {
-        "statusCode": status_code,
-        "body": json.dumps(response_body),
+        "statusCode": 200,
+        "body": json.dumps(
+            {
+                "message": "Adscribe raw landing workflow started.",
+                "batch_id": batch_id,
+                "run_id": run_id,
+                "executionArn": execution_response["executionArn"],
+            }
+        ),
     }
