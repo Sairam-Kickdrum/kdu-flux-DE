@@ -75,3 +75,19 @@ variable "adscribe_glue_script_s3_key" {
   type        = string
   default     = "glue-scripts/adscribe/adscribe_raw_landing.py"
 }
+
+variable "adscribe_redshift_user" {
+  description = "Redshift username passed to the Adscribe Glue job as a default argument."
+  type        = string
+}
+
+variable "adscribe_redshift_password" {
+  description = "Redshift password passed to the Adscribe Glue job as a default argument."
+  type        = string
+  sensitive   = true
+}
+
+variable "adscribe_redshift_iam_role_arn" {
+  description = "IAM role ARN passed to the Adscribe Glue job so Redshift COPY can read processed Adscribe parquet."
+  type        = string
+}

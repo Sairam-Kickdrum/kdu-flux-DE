@@ -16,8 +16,13 @@ resource "aws_glue_job" "adscribe_raw_landing" {
   }
 
   default_arguments = {
-    "--job-language" = "python"
-    "--TempDir"      = "s3://${data.aws_s3_bucket.adscribe.bucket}/tmp/glue/${var.adscribe_glue_job_name}/"
+    "--job-language"          = "python"
+    "--TempDir"               = "s3://${data.aws_s3_bucket.adscribe.bucket}/tmp/glue/${var.adscribe_glue_job_name}/"
+    "--redshift_host"         = "main-workgroup.743298171118.ap-southeast-1.redshift-serverless.amazonaws.com"
+    "--redshift_port"         = "5439"
+    "--redshift_database"     = "main_db"
+    "--redshift_user"         = var.adscribe_redshift_user
+    "--redshift_password"     = var.adscribe_redshift_password
   }
 
   execution_property {
