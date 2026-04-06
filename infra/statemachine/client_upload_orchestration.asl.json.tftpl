@@ -1,0 +1,124 @@
+{
+  "Comment": "Client upload orchestration: transform Glue -> staging Glue -> final promote Glue",
+  "StartAt": "Prepare Workflow Context",
+  "States": {
+    "Prepare Workflow Context": {
+      "Type": "Pass",
+      "Parameters": {
+        "client_name.$": "$.client_name",
+        "bucket_name.$": "$.bucket_name",
+        "bucket_arn.$": "$.bucket_arn",
+        "object_keys.$": "$.object_keys",
+        "file_names.$": "$.file_names",
+        "event_date.$": "$.event_date",
+        "event_name": "ObjectCreated",
+        "trigger_timestamp.$": "$.trigger_timestamp",
+        "etags.$": "$.etags",
+        "idempotency_group_key.$": "$.idempotency_group_key",
+        "load_id.$": "States.UUID()",
+        "workflow_started_at.$": "$$.State.EnteredTime",
+        "execution_name.$": "$$.Execution.Name"
+      },
+      "Next": "Run Glue Job"
+    },
+    "Run Glue Job": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${glue_job_name}",
+        "Arguments": {
+          "--EVENT_INPUT.$": "States.JsonToString($)"
+        }
+      },
+      "ResultPath": "$.glue_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Glue Failed"
+        }
+      ],
+      "Next": "Run Staging Load Job"
+    },
+    "Run Staging Load Job": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${glue_staging_job_name}",
+        "Arguments": {
+          "--EVENT_INPUT.$": "States.JsonToString($)"
+        }
+      },
+      "ResultPath": "$.staging_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Staging Failed"
+        }
+      ],
+      "Next": "Run Final Promote Job"
+    },
+    "Run Final Promote Job": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${glue_promote_job_name}",
+        "Arguments": {
+          "--EVENT_INPUT.$": "States.JsonToString($)"
+        }
+      },
+      "ResultPath": "$.promote_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "Promote Failed"
+        }
+      ],
+      "Next": "Success"
+    },
+    "Glue Failed": {
+      "Type": "Fail",
+      "Error": "GlueFailed",
+      "Cause": "Glue job failed."
+    },
+    "Staging Failed": {
+      "Type": "Fail",
+      "Error": "StagingLoadFailed",
+      "Cause": "Staging load Lambda failed."
+    },
+    "Promote Failed": {
+      "Type": "Fail",
+      "Error": "FinalPromoteFailed",
+      "Cause": "Final promote Lambda failed."
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}

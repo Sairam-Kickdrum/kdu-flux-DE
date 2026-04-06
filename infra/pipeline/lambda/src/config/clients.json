@@ -1,0 +1,22 @@
+{
+  "clients": {
+    "alpha": {
+      "required_files": [
+        "creator_alpha_codes.csv",
+        "creator_alpha_orders.csv"
+      ]
+    },
+    "beta": {
+      "required_files": [
+        "creator_beta_sales.csv",
+        "creator_beta_shows_and_codes.csv"
+      ]
+    },
+    "gamma": {
+      "required_files": [
+        "creator_gamma_sales.csv",
+        "salesforce_data_client3.csv"
+      ]
+    }
+  }
+}

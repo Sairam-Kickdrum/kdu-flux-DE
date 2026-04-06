@@ -1,0 +1,211 @@
+{
+  "pipeline": {
+    "name": "viewstack",
+    "schema_version": "v1"
+  },
+  "client": {
+    "id": "alpha",
+    "description": "Orders joined to codes on normalized code, then aggregated by date and discount_code."
+  },
+  "source_format": "csv",
+  "partition_column": "date",
+  "date_column": "date",
+  "rename_columns": {
+    "order_date": "order_date_raw",
+    "code": "code",
+    "subtotal_price": "subtotal_price_raw",
+    "new_vs_repeat": "new_vs_repeat",
+    "subs_vs_non": "subs_vs_non"
+  },
+  "cleaning_rules": {
+    "code": "lowercase"
+  },
+  "joins": [
+    {
+      "name": "orders_to_codes",
+      "path": "s3://kdu-spark-s3-data-lake-dev-743298171118/raw/client=alpha/file_type=codes/",
+      "format": "csv",
+      "keys": [
+        "code"
+      ],
+      "column_mapping": {
+        "Promo Code": "code"
+      },
+      "how": "inner",
+      "normalization": {
+        "trim": true,
+        "lowercase": true
+      },
+      "quarantine_on_unmatched": true,
+      "quarantine_reason": "code_not_found_in_codes_file"
+    }
+  ],
+  "post_join_columns": {
+    "discount_code": "code"
+  },
+  "transformations": {
+    "cast_columns": {},
+    "fill_nulls": {},
+    "derived_columns": [
+      {
+        "name": "date",
+        "expression": "COALESCE(\n  to_date(order_date_raw, 'yyyy-MM-dd'),\n  to_date(order_date_raw, 'MM/dd/yyyy'),\n  to_date(order_date_raw, 'M/d/yyyy'),\n  to_date(order_date_raw, 'dd-MM-yyyy'),\n  to_date(order_date_raw, 'dd/MM/yyyy'),\n  to_date(order_date_raw, 'yyyy/MM/dd'),\n  to_date(order_date_raw, 'MMM d, yyyy'),\n  to_date(order_date_raw, 'MMMM d, yyyy'),\n  to_date(order_date_raw)\n)\n"
+      },
+      {
+        "name": "subtotal_price",
+        "expression": "CAST(regexp_replace(trim(subtotal_price_raw), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "client_id",
+        "expression": "'alpha'"
+      }
+    ],
+    "filter_expressions": [
+      "date IS NOT NULL",
+      "code IS NOT NULL",
+      "subtotal_price IS NOT NULL"
+    ]
+  },
+  "drop_columns": [],
+  "gold_aggregations": {
+    "group_by": [
+      "date",
+      "discount_code"
+    ],
+    "metrics": [
+      {
+        "column": "code",
+        "function": "count",
+        "alias": "orders"
+      },
+      {
+        "column": "subtotal_price",
+        "function": "sum",
+        "alias": "revenue"
+      }
+    ]
+  },
+  "common_cleaning": {
+    "date_parsing_rules": {
+      "target_column": "date",
+      "accepted_formats": [
+        "yyyy-MM-dd",
+        "MM/dd/yyyy",
+        "M/d/yyyy",
+        "dd-MM-yyyy",
+        "dd/MM/yyyy",
+        "yyyy/MM/dd",
+        "MMM d, yyyy",
+        "MMMM d, yyyy"
+      ]
+    },
+    "numeric_cleaning": {
+      "target_columns": [
+        "subtotal_price_raw"
+      ],
+      "remove_currency_symbols": true,
+      "remove_thousands_separators": true,
+      "normalize_decimal_separator": "."
+    },
+    "text_normalization": {
+      "trim_columns": [
+        "code"
+      ],
+      "lowercase_columns": [
+        "code"
+      ]
+    },
+    "missing_value_strategy": {
+      "drop_rows_when_missing": [
+        "order_date_raw",
+        "code",
+        "subtotal_price_raw"
+      ]
+    }
+  },
+  "quarantine_rules": [
+    {
+      "name": "code_not_found",
+      "condition": "discount_code IS NULL",
+      "reason": "code_not_found_in_codes_file"
+    }
+  ],
+  "post_processing": {
+    "column_renaming": {
+      "discount_code": "discount_code",
+      "orders": "orders",
+      "revenue": "revenue",
+      "order_date": "order_date",
+      "client_name": "client_name"
+    },
+    "sorting_rules": [
+      {
+        "column": "date",
+        "direction": "asc"
+      },
+      {
+        "column": "discount_code",
+        "direction": "asc"
+      }
+    ],
+    "filtering_rules": [
+      "discount_code IS NOT NULL"
+    ]
+  },
+  "outputs": {
+    "loaded_path": "s3://kdu-spark-s3-data-lake-dev-743298171118/processed/client=alpha/",
+    "quarantine_path": "s3://kdu-spark-s3-data-lake-dev-743298171118/quarantine/client=alpha/",
+    "loaded_schema": [
+      {
+        "name": "discount_code",
+        "type": "string"
+      },
+      {
+        "name": "orders",
+        "type": "bigint"
+      },
+      {
+        "name": "revenue",
+        "type": "double"
+      },
+      {
+        "name": "order_date",
+        "type": "date"
+      },
+      {
+        "name": "client_name",
+        "type": "string"
+      }
+    ],
+    "quarantine_schema": [
+      {
+        "name": "order_date",
+        "type": "string"
+      },
+      {
+        "name": "code",
+        "type": "string"
+      },
+      {
+        "name": "subtotal_price",
+        "type": "string"
+      },
+      {
+        "name": "new_vs_repeat",
+        "type": "string"
+      },
+      {
+        "name": "subs_vs_non",
+        "type": "string"
+      },
+      {
+        "name": "quarantine_reason",
+        "type": "string"
+      }
+    ]
+  },
+  "required_files": [
+    "creator_alpha_codes.csv",
+    "creator_alpha_orders.csv"
+  ]
+}

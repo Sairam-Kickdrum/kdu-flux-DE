@@ -1,0 +1,15 @@
+output "state_machine_name" {
+  value = aws_sfn_state_machine.this.name
+}
+
+output "state_machine_arn" {
+  value = aws_sfn_state_machine.this.arn
+}
+
+output "role_arn" {
+  value = aws_iam_role.this.arn
+}
+
+output "role_name" {
+  value = aws_iam_role.this.name
+}

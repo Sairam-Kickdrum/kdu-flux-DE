@@ -1,0 +1,352 @@
+{
+  "pipeline": {
+    "name": "viewstack",
+    "schema_version": "v1"
+  },
+  "client": {
+    "id": "beta",
+    "description": "Sales enriched by shows_and_codes, with segment-split order logic."
+  },
+  "source_format": "csv",
+  "partition_column": "date",
+  "date_column": "date",
+  "rename_columns": {
+    "date": "date_raw",
+    "Show": "show",
+    "Promo Code": "promo_code_raw",
+    "Sales": "revenue_raw",
+    "Orders": "orders_raw",
+    "Sub Shipments": "sub_shipments_raw",
+    "New": "new_raw",
+    "Lapsed": "lapsed_raw",
+    "Active": "active_raw"
+  },
+  "cleaning_rules": {
+    "show": "lowercase"
+  },
+  "joins": [
+    {
+      "name": "sales_to_shows_codes",
+      "path": "s3://kdu-spark-s3-data-lake-dev-743298171118/raw/client=beta/file_type=shows_and_codes/",
+      "format": "csv",
+      "keys": [
+        "show"
+      ],
+      "column_mapping": {
+        "OMAHA SHOWNAME": "show",
+        "CODE": "discount_code",
+        "ShowID": "show_id",
+        "Campaign Item?": "campaign_item"
+      },
+      "how": "left",
+      "normalization": {
+        "trim": true,
+        "lowercase": true
+      },
+      "quarantine_on_unmatched": true,
+      "quarantine_reason": "unmatched_show_in_shows_and_codes"
+    }
+  ],
+  "transformations": {
+    "cast_columns": {},
+    "fill_nulls": {
+      "sub_shipments_raw": 0,
+      "new_raw": 0,
+      "lapsed_raw": 0,
+      "active_raw": 0
+    },
+    "derived_columns": [
+      {
+        "name": "date",
+        "expression": "COALESCE(\n  to_date(date_raw, 'yyyy-MM-dd'),\n  to_date(date_raw, 'MM/dd/yyyy'),\n  to_date(date_raw, 'M/d/yyyy'),\n  to_date(date_raw, 'dd-MM-yyyy'),\n  to_date(date_raw, 'dd/MM/yyyy'),\n  to_date(date_raw)\n)\n"
+      },
+      {
+        "name": "revenue",
+        "expression": "CAST(regexp_replace(trim(revenue_raw), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "orders",
+        "expression": "CAST(regexp_replace(trim(orders_raw), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "sub_shipments",
+        "expression": "CAST(regexp_replace(trim(COALESCE(sub_shipments_raw, '0')), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "New",
+        "expression": "CAST(regexp_replace(trim(COALESCE(new_raw, '0')), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "Lapsed",
+        "expression": "CAST(regexp_replace(trim(COALESCE(lapsed_raw, '0')), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "Active",
+        "expression": "CAST(regexp_replace(trim(COALESCE(active_raw, '0')), '[^0-9.\\-]', '') AS DOUBLE)"
+      },
+      {
+        "name": "active_segment_count",
+        "expression": "(CASE WHEN COALESCE(New, 0) > 0 THEN 1 ELSE 0 END) + (CASE WHEN COALESCE(Lapsed, 0) > 0 THEN 1 ELSE 0 END) + (CASE WHEN COALESCE(Active, 0) > 0 THEN 1 ELSE 0 END)\n"
+      },
+      {
+        "name": "split_order_value",
+        "expression": "CASE WHEN active_segment_count > 0 THEN orders / active_segment_count ELSE 0 END"
+      },
+      {
+        "name": "new_orders",
+        "expression": "CASE WHEN COALESCE(New, 0) > 0 THEN split_order_value ELSE 0 END"
+      },
+      {
+        "name": "lapsed_orders",
+        "expression": "CASE WHEN COALESCE(Lapsed, 0) > 0 THEN split_order_value ELSE 0 END"
+      },
+      {
+        "name": "active_orders",
+        "expression": "CASE WHEN COALESCE(Active, 0) > 0 THEN split_order_value ELSE 0 END"
+      },
+      {
+        "name": "client_id",
+        "expression": "'beta'"
+      }
+    ],
+    "filter_expressions": [
+      "date IS NOT NULL",
+      "show IS NOT NULL",
+      "ROUND(new_orders + lapsed_orders + active_orders, 6) = ROUND(orders, 6)"
+    ]
+  },
+  "drop_columns": [],
+  "aggregation": {
+    "group_by": [
+      "date",
+      "discount_code"
+    ],
+    "metrics": [
+      {
+        "column": "revenue",
+        "function": "sum",
+        "alias": "revenue"
+      },
+      {
+        "column": "orders",
+        "function": "sum",
+        "alias": "orders"
+      },
+      {
+        "column": "sub_shipments",
+        "function": "sum",
+        "alias": "sub_shipments"
+      },
+      {
+        "column": "new_orders",
+        "function": "sum",
+        "alias": "new_orders"
+      },
+      {
+        "column": "lapsed_orders",
+        "function": "sum",
+        "alias": "lapsed_orders"
+      },
+      {
+        "column": "active_orders",
+        "function": "sum",
+        "alias": "active_orders"
+      }
+    ]
+  },
+  "gold_aggregations": {
+    "group_by": [
+      "date",
+      "discount_code"
+    ],
+    "metrics": [
+      {
+        "column": "revenue",
+        "function": "sum",
+        "alias": "revenue"
+      },
+      {
+        "column": "orders",
+        "function": "sum",
+        "alias": "orders"
+      },
+      {
+        "column": "sub_shipments",
+        "function": "sum",
+        "alias": "sub_shipments"
+      },
+      {
+        "column": "new_orders",
+        "function": "sum",
+        "alias": "new_orders"
+      },
+      {
+        "column": "lapsed_orders",
+        "function": "sum",
+        "alias": "lapsed_orders"
+      },
+      {
+        "column": "active_orders",
+        "function": "sum",
+        "alias": "active_orders"
+      }
+    ]
+  },
+  "common_cleaning": {
+    "date_parsing_rules": {
+      "target_column": "date",
+      "accepted_formats": [
+        "yyyy-MM-dd",
+        "MM/dd/yyyy",
+        "M/d/yyyy",
+        "dd-MM-yyyy",
+        "dd/MM/yyyy"
+      ]
+    },
+    "numeric_cleaning": {
+      "target_columns": [
+        "revenue_raw",
+        "orders_raw",
+        "sub_shipments_raw",
+        "new_raw",
+        "lapsed_raw",
+        "active_raw"
+      ],
+      "remove_currency_symbols": true,
+      "remove_thousands_separators": true,
+      "normalize_decimal_separator": "."
+    },
+    "text_normalization": {
+      "trim_columns": [
+        "show",
+        "discount_code"
+      ],
+      "lowercase_columns": [
+        "show",
+        "discount_code"
+      ]
+    },
+    "missing_value_strategy": {
+      "drop_rows_when_missing": [
+        "date_raw",
+        "show",
+        "orders_raw"
+      ],
+      "fill_defaults": {
+        "new_raw": 0,
+        "lapsed_raw": 0,
+        "active_raw": 0
+      }
+    }
+  },
+  "quarantine_rules": [
+    {
+      "name": "unmatched_shows_codes",
+      "condition": "discount_code IS NULL",
+      "reason": "unmatched_show_in_shows_and_codes"
+    },
+    {
+      "name": "segment_split_mismatch",
+      "condition": "ROUND(new_orders + lapsed_orders + active_orders, 6) <> ROUND(orders, 6)",
+      "reason": "segment_split_mismatch"
+    }
+  ],
+  "post_processing": {
+    "column_renaming": {
+      "discount_code": "discount_code",
+      "orders": "orders",
+      "revenue": "revenue",
+      "order_date": "order_date",
+      "client_name": "client_name"
+    },
+    "sorting_rules": [
+      {
+        "column": "date",
+        "direction": "asc"
+      },
+      {
+        "column": "discount_code",
+        "direction": "asc"
+      }
+    ],
+    "filtering_rules": [
+      "discount_code IS NOT NULL"
+    ]
+  },
+  "outputs": {
+    "loaded_path": "s3://kdu-spark-s3-data-lake-dev-743298171118/processed/client=beta/",
+    "quarantine_path": "s3://kdu-spark-s3-data-lake-dev-743298171118/quarantine/client=beta/",
+    "loaded_schema": [
+      {
+        "name": "discount_code",
+        "type": "string"
+      },
+      {
+        "name": "orders",
+        "type": "bigint"
+      },
+      {
+        "name": "revenue",
+        "type": "double"
+      },
+      {
+        "name": "order_date",
+        "type": "date"
+      },
+      {
+        "name": "client_name",
+        "type": "string"
+      }
+    ],
+    "quarantine_schema": [
+      {
+        "name": "date",
+        "type": "string"
+      },
+      {
+        "name": "show",
+        "type": "string"
+      },
+      {
+        "name": "orders",
+        "type": "string"
+      },
+      {
+        "name": "sub_shipments",
+        "type": "string"
+      },
+      {
+        "name": "New",
+        "type": "string"
+      },
+      {
+        "name": "Lapsed",
+        "type": "string"
+      },
+      {
+        "name": "Active",
+        "type": "string"
+      },
+      {
+        "name": "revenue",
+        "type": "string"
+      },
+      {
+        "name": "promo_code_raw",
+        "type": "string"
+      },
+      {
+        "name": "quarantine_reason",
+        "type": "string"
+      },
+      {
+        "name": "client_id",
+        "type": "string"
+      }
+    ]
+  },
+  "required_files": [
+    "creator_beta_sales.csv",
+    "creator_beta_shows_and_codes.csv"
+  ]
+}

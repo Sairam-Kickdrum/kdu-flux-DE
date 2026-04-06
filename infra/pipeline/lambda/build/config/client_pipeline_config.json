@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "clients": {
+    "alpha": {
+      "required_files": [
+        {"file_type": "codes", "patterns": ["*codes*.csv", "creator_alpha_codes.csv"]},
+        {"file_type": "orders", "patterns": ["*orders*.csv", "creator_alpha_orders.csv"]}
+      ]
+    },
+    "beta": {
+      "required_files": [
+        {"file_type": "sales", "patterns": ["*sales*.csv", "creator_beta_sales.csv"]},
+        {"file_type": "shows_and_codes", "patterns": ["*shows_and_codes*.csv", "creator_beta_shows_and_codes.csv"]}
+      ]
+    },
+    "gamma": {
+      "required_files": [
+        {"file_type": "sales", "patterns": ["*sales*.csv", "creator_gamma_sales.csv"]},
+        {"file_type": "salesforce_data", "patterns": ["*salesforce_data*.csv", "salesforce_data_client3.csv"]}
+      ]
+    }
+  }
+}
