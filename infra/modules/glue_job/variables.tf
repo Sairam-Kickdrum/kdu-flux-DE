@@ -64,3 +64,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "extra_iam_statements" {
+  description = "Additional IAM policy statements for Glue job role"
+  type        = any
+  default     = []
+}

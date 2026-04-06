@@ -57,3 +57,31 @@ output "pipeline_config_s3_uri" {
 output "redshift_s3_access_role_arn" {
   value = aws_iam_role.redshift_s3_access.arn
 }
+
+output "glue_stage_load_job_name" {
+  value = module.glue_stage_load_job.job_name
+}
+
+output "glue_final_promote_job_name" {
+  value = module.glue_final_promote_job.job_name
+}
+
+output "dashboard_api_invoke_url" {
+  value = module.dashboard_api.api_invoke_url
+}
+
+output "dashboard_api_gateway_id" {
+  value = module.dashboard_api.api_gateway_id
+}
+
+output "dashboard_api_lambda_function_names" {
+  value = module.dashboard_api.lambda_function_names
+}
+
+output "dashboard_api_lambda_role_names" {
+  value = module.dashboard_api.lambda_role_names
+}
+
+output "dashboard_api_redshift_secret_arn_effective" {
+  value = local.dashboard_api_effective_secret_arn
+}

@@ -8,9 +8,9 @@ variable "iam_role_name" {
   type        = string
 }
 
-variable "glue_job_arn" {
-  description = "Glue job ARN the state machine can execute"
-  type        = string
+variable "glue_job_arns" {
+  description = "Glue job ARNs the state machine can execute"
+  type        = list(string)
 }
 
 variable "definition" {

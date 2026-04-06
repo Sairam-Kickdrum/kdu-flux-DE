@@ -33,7 +33,7 @@ resource "aws_iam_role_policy" "this" {
           "glue:GetJobRuns",
           "glue:GetJob"
         ]
-        Resource = var.glue_job_arn
+        Resource = var.glue_job_arns
       }
     ]
   })

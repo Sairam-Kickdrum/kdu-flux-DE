@@ -1,0 +1,2 @@
+﻿# No third-party package needed at runtime.
+# Lambda managed runtime includes boto3/botocore.

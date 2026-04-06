@@ -1,7 +1,8 @@
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
+from urllib.parse import unquote_plus
 
 import boto3
 from awsglue.context import GlueContext
@@ -19,12 +20,15 @@ FINAL_SCHEMA = [
     ("revenue", "double"),
     ("order_date", "date"),
     ("client_name", "string"),
+    ("event_name", "string"),
+    ("load_id", "string"),
+    ("event_date", "date"),
 ]
 
 
-# ------------------------------
-# Argument and config utilities
-# ------------------------------
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 def _parse_optional_args(argv: List[str]) -> Dict[str, str]:
     options: Dict[str, str] = {}
@@ -53,34 +57,48 @@ def _load_json_from_s3(s3_uri: str) -> Dict[str, Any]:
     return json.loads(body)
 
 
+def _require_non_empty(value: Any, field_name: str) -> str:
+    if value is None:
+        raise ValueError(f"Missing required field in EVENT_INPUT: {field_name}")
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"Missing required field in EVENT_INPUT: {field_name}")
+    return text
+
+
+def _resolve_load_id(event_input: Dict[str, Any]) -> str:
+    direct_load_id = event_input.get("load_id")
+    if direct_load_id:
+        return _require_non_empty(direct_load_id, "load_id")
+
+    workflow_obj = event_input.get("workflow")
+    if isinstance(workflow_obj, dict):
+        nested_load_id = workflow_obj.get("load_id")
+        if nested_load_id:
+            return _require_non_empty(nested_load_id, "workflow.load_id")
+
+    raise ValueError("Missing required field in EVENT_INPUT: load_id")
+
+
 def _build_client_config_s3_uri(bucket_name: str, client_name: str, base_prefix: str, version_file: str) -> str:
     return f"s3://{bucket_name}/{base_prefix}/client={client_name}/{version_file}"
 
 
-# ------------------------------
-# DataFrame helpers
-# ------------------------------
-
 def _read_csv(glue_ctx: GlueContext, bucket_name: str, object_key: str) -> DataFrame:
-    path = f"s3://{bucket_name}/{object_key}"
     return (
         glue_ctx.spark_session.read
         .option("header", "true")
         .option("inferSchema", "true")
-        .csv(path)
+        .csv(f"s3://{bucket_name}/{object_key}")
     )
 
 
 def _normalize_header_columns(df: DataFrame) -> DataFrame:
-    """
-    Make raw CSV headers safer by trimming leading/trailing whitespace.
-    Example: ' order_date\\t' -> 'order_date'
-    """
     out = df
-    for c in df.columns:
-        normalized = c.strip()
-        if normalized != c:
-            out = out.withColumnRenamed(c, normalized)
+    for col_name in df.columns:
+        normalized = col_name.strip()
+        if normalized != col_name:
+            out = out.withColumnRenamed(col_name, normalized)
     return out
 
 
@@ -93,10 +111,6 @@ def _safe_rename(df: DataFrame, rename_map: Dict[str, str]) -> DataFrame:
 
 
 def _apply_output_from_source_mapping(df: DataFrame, mapping: Dict[str, str]) -> DataFrame:
-    """
-    Some configs use mapping as: {output_column: source_column}.
-    Example: {"discount_code": "code"} means create discount_code from code.
-    """
     out = df
     for output_col, source_col in mapping.items():
         if source_col in out.columns:
@@ -119,9 +133,7 @@ def _apply_fill_nulls(df: DataFrame, fill_map: Dict[str, Any]) -> DataFrame:
     if not fill_map:
         return df
     valid = {k: v for k, v in fill_map.items() if k in df.columns}
-    if not valid:
-        return df
-    return df.fillna(valid)
+    return df.fillna(valid) if valid else df
 
 
 def _apply_derived_columns(df: DataFrame, derived_columns: List[Dict[str, str]]) -> DataFrame:
@@ -145,7 +157,6 @@ def _build_agg_expr(metric: Dict[str, str]) -> F.Column:
     fn = metric["function"].lower()
     col_name = metric["column"]
     alias = metric["alias"]
-
     if fn == "sum":
         return F.sum(F.col(col_name)).alias(alias)
     if fn == "count":
@@ -156,151 +167,33 @@ def _build_agg_expr(metric: Dict[str, str]) -> F.Column:
 
 
 def _aggregate(df: DataFrame, group_by_cols: List[str], metrics: List[Dict[str, str]]) -> DataFrame:
-    agg_exprs = [_build_agg_expr(m) for m in metrics]
-    return df.groupBy(*group_by_cols).agg(*agg_exprs)
+    return df.groupBy(*group_by_cols).agg(*[_build_agg_expr(m) for m in metrics])
 
-
-# ------------------------------
-# Client-specific orchestration
-# ------------------------------
 
 def _pick_primary_and_lookup(client_name: str, file_map: Dict[str, str]) -> Tuple[str, str]:
     names = list(file_map.keys())
-
     if client_name == "alpha":
-        primary = next(n for n in names if "orders" in n)
-        lookup = next(n for n in names if "codes" in n)
-        return primary, lookup
-
+        return next(n for n in names if "orders" in n), next(n for n in names if "codes" in n)
     if client_name == "beta":
-        primary = next(n for n in names if "sales" in n and "shows" not in n)
-        lookup = next(n for n in names if "shows_and_codes" in n)
-        return primary, lookup
-
+        return next(n for n in names if "sales" in n and "shows" not in n), next(n for n in names if "shows_and_codes" in n)
     if client_name == "gamma":
-        primary = next(n for n in names if "creator_gamma_sales" in n)
-        lookup = next(n for n in names if "salesforce_data" in n)
-        return primary, lookup
-
+        return next(n for n in names if "creator_gamma_sales" in n), next(n for n in names if "salesforce_data" in n)
     raise ValueError(f"Unsupported client_name: {client_name}")
 
 
-def _run_client_transform(
-    glue_ctx: GlueContext,
-    client_name: str,
-    bucket_name: str,
-    event_input: Dict[str, Any],
-    cfg: Dict[str, Any],
-) -> DataFrame:
-    file_names: List[str] = event_input.get("file_names", [])
-    object_keys: List[str] = event_input.get("object_keys", [])
-
-    if len(file_names) != len(object_keys):
-        raise ValueError("event_input file_names and object_keys length mismatch")
-
-    file_map = {file_names[i]: object_keys[i] for i in range(len(file_names))}
-
-    required_files = set(cfg.get("required_files", []))
-    missing_required = sorted([f for f in required_files if f not in file_map])
-    if missing_required:
-        raise ValueError(f"Missing required files for {client_name}: {missing_required}")
-
-    primary_file, lookup_file = _pick_primary_and_lookup(client_name, file_map)
-
-    primary_df = _read_csv(glue_ctx, bucket_name, file_map[primary_file])
-    lookup_df = _read_csv(glue_ctx, bucket_name, file_map[lookup_file])
-    primary_df = _normalize_header_columns(primary_df)
-    lookup_df = _normalize_header_columns(lookup_df)
-
-    primary_df = _safe_rename(primary_df, cfg.get("rename_columns", {}))
-
-    join_cfg = (cfg.get("joins") or [None])[0]
-    if not join_cfg:
-        raise ValueError("Config must contain at least one join definition")
-
-    lookup_rename = join_cfg.get("column_mapping", {})
-    lookup_df = _safe_rename(lookup_df, lookup_rename)
-
-    norm_cfg = join_cfg.get("normalization", {})
-    trim_cols = []
-    lower_cols = []
-    if norm_cfg.get("trim"):
-        trim_cols = [join_cfg["keys"][0]]
-    if norm_cfg.get("lowercase"):
-        lower_cols = [join_cfg["keys"][0]]
-
-    # Also include explicit cleaning rules from config.
-    for col_name, rule in (cfg.get("cleaning_rules") or {}).items():
-        if "trim" in str(rule).lower() and col_name not in trim_cols:
-            trim_cols.append(col_name)
-        if "lower" in str(rule).lower() and col_name not in lower_cols:
-            lower_cols.append(col_name)
-
-    primary_df = _normalize_columns(primary_df, trim_cols, lower_cols)
-    lookup_df = _normalize_columns(lookup_df, trim_cols, lower_cols)
-
-    join_key = join_cfg["keys"][0]
-    join_how = join_cfg.get("how", "left")
-
-    joined = primary_df.alias("left").join(
-        lookup_df.alias("right"),
-        F.col(f"left.{join_key}") == F.col(f"right.{join_key}"),
-        join_how,
-    )
-
-    if join_cfg.get("quarantine_on_unmatched", False):
-        joined = joined.filter(F.col(f"right.{join_key}").isNotNull())
-
-    # Resolve duplicate join key column by keeping left-side key.
-    joined = joined.drop(F.col(f"right.{join_key}"))
-
-    fill_nulls = cfg.get("transformations", {}).get("fill_nulls", {})
-    joined = _apply_fill_nulls(joined, fill_nulls)
-
-    derived_cols = cfg.get("transformations", {}).get("derived_columns", [])
-    joined = _apply_derived_columns(joined, derived_cols)
-
-    filters = cfg.get("transformations", {}).get("filter_expressions", [])
-    joined = _apply_filters(joined, filters)
-
-    post_join_columns = cfg.get("post_join_columns", {})
-    joined = _apply_output_from_source_mapping(joined, post_join_columns)
-
-    agg_cfg = cfg.get("gold_aggregations") or cfg.get("aggregation")
-    if not agg_cfg:
-        raise ValueError("Missing aggregation config")
-
-    aggregated = _aggregate(joined, agg_cfg.get("group_by", []), agg_cfg.get("metrics", []))
-
-    # Unify business date column name for partitioning requirement.
-    if "order_date" not in aggregated.columns:
-        if "date" in aggregated.columns:
-            aggregated = aggregated.withColumn("order_date", F.col("date").cast("date"))
-        else:
-            raise ValueError("Transformed dataset must contain 'date' or 'order_date'")
-
-    aggregated = aggregated.withColumn("client_name", F.lit(client_name))
-    return aggregated
-
-
-# ------------------------------
-# Output and Redshift load
-# ------------------------------
-
-def _write_processed_to_s3(df: DataFrame, bucket_name: str, client_name: str) -> str:
-    out = (
-        df.withColumn("order_date", F.to_date(F.col("order_date")))
-        .filter(F.col("order_date").isNotNull())
-        .withColumn("year", F.date_format(F.col("order_date"), "yyyy"))
-        .withColumn("month", F.date_format(F.col("order_date"), "MM"))
-        .withColumn("day", F.date_format(F.col("order_date"), "dd"))
-    )
-
-    processed_prefix = f"processed/client_uploads/{client_name}/"
-    processed_uri = f"s3://{bucket_name}/{processed_prefix}"
-
-    out.write.mode("append").partitionBy("year", "month", "day").parquet(processed_uri)
-    return processed_uri
+def _canonical_file_name(name: str) -> str:
+    """
+    Normalize filename for robust matching across client uploads/config:
+    - decode URL-encoded names
+    - keep only basename (strip any prefix/path)
+    - trim and lowercase
+    - treat `.csv` suffix as optional
+    """
+    raw = unquote_plus((name or "").strip())
+    base = raw.split("/")[-1].strip().lower()
+    if base.endswith(".csv"):
+        base = base[:-4]
+    return base
 
 
 def _type_expr(type_name: str) -> T.DataType:
@@ -310,18 +203,70 @@ def _type_expr(type_name: str) -> T.DataType:
         "date": T.DateType(),
         "bigint": T.LongType(),
     }
-    if type_name not in mapping:
-        raise ValueError(f"Unsupported type in FINAL_SCHEMA: {type_name}")
     return mapping[type_name]
 
 
-def _enforce_final_schema(df: DataFrame, client_name: str, bucket_name: str) -> DataFrame:
+def _write_schema_drift_quarantine(
+    df: DataFrame,
+    bucket_name: str,
+    client_name: str,
+    extra_columns: List[str],
+    missing_columns: List[str],
+    existing_columns: List[str],
+    expected_columns: List[str],
+) -> None:
+    s3 = boto3.client("s3")
+    drift_key = f"quarantine/client={client_name}/columns/{_now_utc().strftime('%Y%m%dT%H%M%SZ')}.json"
+    s3.put_object(
+        Bucket=bucket_name,
+        Key=drift_key,
+        Body=json.dumps(
+            {
+                "type": "schema_drift",
+                "client_name": client_name,
+                "timestamp_utc": _now_utc().isoformat(),
+                "extra_columns": extra_columns,
+                "missing_columns": missing_columns,
+                "existing_columns": existing_columns,
+                "expected_columns": expected_columns,
+            },
+            indent=2,
+        ).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    if extra_columns:
+        sample = df.withColumn("client_name", F.lit(client_name))
+        if "order_date" not in sample.columns and "date" in sample.columns:
+            sample = sample.withColumn("order_date", F.col("date").cast("date"))
+        if "order_date" not in sample.columns:
+            sample = sample.withColumn("order_date", F.lit(None).cast("date"))
+
+        keep_cols = ["client_name", "order_date"] + [c for c in extra_columns if c in sample.columns]
+        (
+            sample.select(*keep_cols)
+            .withColumn("year", F.date_format(F.col("order_date"), "yyyy"))
+            .withColumn("month", F.date_format(F.col("order_date"), "MM"))
+            .withColumn("day", F.date_format(F.col("order_date"), "dd"))
+            .write.mode("append")
+            .partitionBy("year", "month", "day")
+            .parquet(f"s3://{bucket_name}/quarantine/client={client_name}/columns/")
+        )
+
+
+def _enforce_final_schema(
+    df: DataFrame,
+    client_name: str,
+    bucket_name: str,
+    load_id: str,
+    event_date: str,
+    event_name: str,
+) -> DataFrame:
     expected_names = [name for name, _ in FINAL_SCHEMA]
     existing_names = df.columns
 
     extra_columns = sorted([c for c in existing_names if c not in expected_names])
     missing_columns = sorted([c for c in expected_names if c not in existing_names])
-
     if extra_columns or missing_columns:
         _write_schema_drift_quarantine(
             df=df,
@@ -337,6 +282,11 @@ def _enforce_final_schema(df: DataFrame, client_name: str, bucket_name: str) -> 
     if "order_date" not in out.columns and "date" in out.columns:
         out = out.withColumn("order_date", F.col("date").cast("date"))
 
+    out = out.withColumn("client_name", F.lit(client_name))
+    out = out.withColumn("event_name", F.lit(event_name))
+    out = out.withColumn("load_id", F.lit(load_id))
+    out = out.withColumn("event_date", F.lit(event_date).cast("date"))
+
     for col_name, col_type in FINAL_SCHEMA:
         dtype = _type_expr(col_type)
         if col_name not in out.columns:
@@ -344,130 +294,136 @@ def _enforce_final_schema(df: DataFrame, client_name: str, bucket_name: str) -> 
         else:
             out = out.withColumn(col_name, F.col(col_name).cast(dtype))
 
-    # Redshift target requires non-null orders and client_name.
     out = out.fillna({"orders": 0})
-    out = out.withColumn(
-        "client_name",
-        F.when(F.col("client_name").isNull() | (F.length(F.trim(F.col("client_name"))) == 0), F.lit(client_name)).otherwise(
-            F.col("client_name")
-        ),
+    return out.select(*[F.col(c) for c, _ in FINAL_SCHEMA])
+
+
+def _run_client_transform(
+    glue_ctx: GlueContext,
+    client_name: str,
+    bucket_name: str,
+    event_input: Dict[str, Any],
+    cfg: Dict[str, Any],
+    load_id: str,
+    event_date: str,
+    event_name: str,
+) -> DataFrame:
+    file_names: List[str] = event_input.get("file_names", [])
+    object_keys: List[str] = event_input.get("object_keys", [])
+    if len(file_names) != len(object_keys):
+        raise ValueError("file_names and object_keys length mismatch")
+
+    # Build canonical map so matching is resilient to `.csv` suffix and case.
+    file_map: Dict[str, str] = {}
+    for i in range(len(file_names)):
+        incoming_name = file_names[i] or object_keys[i].split("/")[-1]
+        canonical_name = _canonical_file_name(incoming_name)
+        if canonical_name:
+            file_map[canonical_name] = object_keys[i]
+
+    required_files_raw: List[str] = cfg.get("required_files", [])
+    required_files_canonical = {_canonical_file_name(name): name for name in required_files_raw}
+    missing_required = sorted(
+        [
+            required_files_canonical[key]
+            for key in required_files_canonical
+            if key not in file_map
+        ]
+    )
+    if missing_required:
+        raise ValueError(f"Missing required files for {client_name}: {missing_required}")
+
+    primary_file, lookup_file = _pick_primary_and_lookup(client_name, file_map)
+    primary_df = _normalize_header_columns(_read_csv(glue_ctx, bucket_name, file_map[primary_file]))
+    lookup_df = _normalize_header_columns(_read_csv(glue_ctx, bucket_name, file_map[lookup_file]))
+
+    primary_df = _safe_rename(primary_df, cfg.get("rename_columns", {}))
+    join_cfg = (cfg.get("joins") or [None])[0]
+    if not join_cfg:
+        raise ValueError("Config must contain joins")
+    lookup_df = _safe_rename(lookup_df, join_cfg.get("column_mapping", {}))
+
+    trim_cols: List[str] = []
+    lower_cols: List[str] = []
+    if join_cfg.get("normalization", {}).get("trim"):
+        trim_cols.append(join_cfg["keys"][0])
+    if join_cfg.get("normalization", {}).get("lowercase"):
+        lower_cols.append(join_cfg["keys"][0])
+    for col_name, rule in (cfg.get("cleaning_rules") or {}).items():
+        if "trim" in str(rule).lower() and col_name not in trim_cols:
+            trim_cols.append(col_name)
+        if "lower" in str(rule).lower() and col_name not in lower_cols:
+            lower_cols.append(col_name)
+
+    primary_df = _normalize_columns(primary_df, trim_cols, lower_cols)
+    lookup_df = _normalize_columns(lookup_df, trim_cols, lower_cols)
+
+    join_key = join_cfg["keys"][0]
+    joined = primary_df.alias("left").join(
+        lookup_df.alias("right"),
+        F.col(f"left.{join_key}") == F.col(f"right.{join_key}"),
+        join_cfg.get("how", "left"),
     )
 
-    # Keep only final columns in exact order.
-    out = out.select(*[F.col(c) for c, _ in FINAL_SCHEMA])
-    return out
+    if join_cfg.get("quarantine_on_unmatched", False):
+        joined = joined.filter(F.col(f"right.{join_key}").isNotNull())
+
+    joined = joined.drop(F.col(f"right.{join_key}"))
+    joined = _apply_fill_nulls(joined, cfg.get("transformations", {}).get("fill_nulls", {}))
+    joined = _apply_derived_columns(joined, cfg.get("transformations", {}).get("derived_columns", []))
+    joined = _apply_filters(joined, cfg.get("transformations", {}).get("filter_expressions", []))
+    joined = _apply_output_from_source_mapping(joined, cfg.get("post_join_columns", {}))
+
+    agg_cfg = cfg.get("gold_aggregations") or cfg.get("aggregation")
+    if not agg_cfg:
+        raise ValueError("Missing aggregation config")
+    aggregated = _aggregate(joined, agg_cfg.get("group_by", []), agg_cfg.get("metrics", []))
+
+    return _enforce_final_schema(aggregated, client_name, bucket_name, load_id, event_date, event_name)
 
 
-def _write_schema_drift_quarantine(
-    df: DataFrame,
-    bucket_name: str,
-    client_name: str,
-    extra_columns: List[str],
-    missing_columns: List[str],
-    existing_columns: List[str],
-    expected_columns: List[str],
-) -> None:
-    key = f"quarantine/client={client_name}/columns/{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.json"
-    payload = {
-        "type": "schema_drift",
-        "client_name": client_name,
-        "timestamp_utc": datetime.utcnow().isoformat(),
-        "extra_columns": extra_columns,
-        "missing_columns": missing_columns,
-        "existing_columns": existing_columns,
-        "expected_columns": expected_columns,
-    }
-    boto3.client("s3").put_object(
+def _write_processed_to_s3(df: DataFrame, bucket_name: str, client_name: str) -> str:
+    out = (
+        df.withColumn("order_date", F.to_date(F.col("order_date")))
+        .filter(F.col("order_date").isNotNull())
+        .withColumn("year", F.date_format(F.col("order_date"), "yyyy"))
+        .withColumn("month", F.date_format(F.col("order_date"), "MM"))
+        .withColumn("day", F.date_format(F.col("order_date"), "dd"))
+    )
+    uri = f"s3://{bucket_name}/processed/client_uploads/{client_name}/"
+    out.write.mode("append").partitionBy("year", "month", "day").parquet(uri)
+    return uri
+
+
+def _build_manifest_for_load(bucket_name: str, client_name: str, load_id: str, not_before: datetime) -> str:
+    s3 = boto3.client("s3")
+    prefix = f"processed/client_uploads/{client_name}/"
+
+    keys: List[str] = []
+    continuation = None
+    while True:
+        kwargs: Dict[str, Any] = {"Bucket": bucket_name, "Prefix": prefix}
+        if continuation:
+            kwargs["ContinuationToken"] = continuation
+        resp = s3.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            key = obj.get("Key", "")
+            if key.endswith(".parquet") and obj["LastModified"] >= not_before:
+                keys.append(key)
+        if not resp.get("IsTruncated"):
+            break
+        continuation = resp.get("NextContinuationToken")
+
+    manifest = {"entries": [{"url": f"s3://{bucket_name}/{k}", "mandatory": True} for k in keys]}
+    manifest_key = f"processed/client_uploads/{client_name}/_manifests/{load_id}.manifest.json"
+    s3.put_object(
         Bucket=bucket_name,
-        Key=key,
-        Body=json.dumps(payload, indent=2).encode("utf-8"),
+        Key=manifest_key,
+        Body=json.dumps(manifest).encode("utf-8"),
         ContentType="application/json",
     )
+    return f"s3://{bucket_name}/{manifest_key}"
 
-    if extra_columns:
-        # Persist actual extra-column values for investigation.
-        columns_df = df
-        if "date" in columns_df.columns:
-            columns_df = columns_df.withColumn("order_date", F.col("date").cast("date"))
-        elif "order_date" not in columns_df.columns:
-            columns_df = columns_df.withColumn("order_date", F.lit(None).cast("date"))
-
-        columns_df = columns_df.withColumn("client_name", F.lit(client_name))
-        keep_cols = ["client_name", "order_date"] + [c for c in extra_columns if c in columns_df.columns]
-        quarantine_uri = f"s3://{bucket_name}/quarantine/client={client_name}/columns/"
-        (
-            columns_df.select(*keep_cols)
-            .withColumn("year", F.date_format(F.col("order_date"), "yyyy"))
-            .withColumn("month", F.date_format(F.col("order_date"), "MM"))
-            .withColumn("day", F.date_format(F.col("order_date"), "dd"))
-            .write.mode("append")
-            .partitionBy("year", "month", "day")
-            .parquet(quarantine_uri)
-        )
-
-
-def _redshift_jdbc_url(options: Dict[str, str]) -> str:
-    if options.get("REDSHIFT_JDBC_URL"):
-        jdbc_url = options["REDSHIFT_JDBC_URL"]
-        if "your-redshift-cluster" in jdbc_url or "your_database" in jdbc_url:
-            raise ValueError(
-                "REDSHIFT_JDBC_URL is still a placeholder. "
-                "Set it to the real endpoint, e.g. jdbc:redshift://<endpoint>:5439/<database>."
-            )
-        return jdbc_url
-
-    host = options.get("REDSHIFT_HOST")
-    port = options.get("REDSHIFT_PORT", "5439")
-    database = options.get("REDSHIFT_DATABASE")
-    if not host or not database:
-        raise ValueError("Missing Redshift connection details. Set REDSHIFT_JDBC_URL or REDSHIFT_HOST + REDSHIFT_DATABASE")
-
-    return f"jdbc:redshift://{host}:{port}/{database}"
-
-
-def _redshift_table(options: Dict[str, str]) -> str:
-    if options.get("REDSHIFT_TABLE"):
-        return options["REDSHIFT_TABLE"]
-
-    schema = options.get("REDSHIFT_SCHEMA")
-    table = options.get("REDSHIFT_TABLE_NAME")
-    if not schema or not table:
-        raise ValueError("Missing Redshift target table. Set REDSHIFT_TABLE or REDSHIFT_SCHEMA + REDSHIFT_TABLE_NAME")
-
-    return f"{schema}.{table}"
-
-
-def _write_to_redshift(df: DataFrame, options: Dict[str, str]) -> None:
-    jdbc_url = _redshift_jdbc_url(options)
-    table_name = _redshift_table(options)
-    user = options.get("REDSHIFT_USER")
-    password = options.get("REDSHIFT_PASSWORD")
-
-    if not user or not password:
-        raise ValueError("Missing Redshift credentials. Set REDSHIFT_USER and REDSHIFT_PASSWORD")
-
-    try:
-        (
-            df.drop("year", "month", "day")
-            .write.format("jdbc")
-            .option("url", jdbc_url)
-            .option("dbtable", table_name)
-            .option("user", user)
-            .option("password", password)
-            .option("driver", "com.amazon.redshift.jdbc.Driver")
-            .mode("append")
-            .save()
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Redshift load failed. Check JDBC endpoint/database, credentials, and Glue network access "
-            "(VPC/subnet/security-group/NACL) to Redshift."
-        ) from exc
-
-
-# ------------------------------
-# Main
-# ------------------------------
 
 def main() -> None:
     required = getResolvedOptions(sys.argv, ["JOB_NAME", "EVENT_INPUT"])
@@ -478,16 +434,21 @@ def main() -> None:
     job = Job(glue_ctx)
     job.init(required["JOB_NAME"], required)
 
+    start_time = _now_utc()
     try:
         event_input = json.loads(required["EVENT_INPUT"])
-        client_name = event_input["client_name"].strip().lower()
-        bucket_name = event_input["bucket_name"]
+        client_name = _require_non_empty(event_input.get("client_name"), "client_name").lower()
+        bucket_name = _require_non_empty(event_input.get("bucket_name"), "bucket_name")
+        load_id = _resolve_load_id(event_input)
+        event_date = _require_non_empty(event_input.get("event_date"), "event_date")
+        event_name = str(event_input.get("event_name", "ObjectCreated")).strip() or "ObjectCreated"
 
-        config_base_prefix = optional.get("CONFIG_BASE_PREFIX", "config")
-        config_version_file = optional.get("CONFIG_VERSION_FILE", "v1.json")
-        config_uri = _build_client_config_s3_uri(bucket_name, client_name, config_base_prefix, config_version_file)
-
-        print(json.dumps({"stage": "config_load", "config_uri": config_uri}))
+        config_uri = _build_client_config_s3_uri(
+            bucket_name,
+            client_name,
+            optional.get("CONFIG_BASE_PREFIX", "config"),
+            optional.get("CONFIG_VERSION_FILE", "v1.json"),
+        )
         cfg = _load_json_from_s3(config_uri)
 
         transformed_df = _run_client_transform(
@@ -496,15 +457,27 @@ def main() -> None:
             bucket_name=bucket_name,
             event_input=event_input,
             cfg=cfg,
+            load_id=load_id,
+            event_date=event_date,
+            event_name=event_name,
         )
 
-        final_df = _enforce_final_schema(transformed_df, client_name, bucket_name)
-        processed_uri = _write_processed_to_s3(final_df, bucket_name, client_name)
-        print(json.dumps({"stage": "processed_write", "processed_uri": processed_uri}))
+        processed_uri = _write_processed_to_s3(transformed_df, bucket_name, client_name)
+        manifest_uri = _build_manifest_for_load(bucket_name, client_name, load_id, start_time)
 
-        _write_to_redshift(final_df, optional)
-        print(json.dumps({"stage": "redshift_load", "status": "SUCCESS", "timestamp": datetime.utcnow().isoformat()}))
-
+        print(
+            json.dumps(
+                {
+                    "stage": "processed_write",
+                    "status": "SUCCESS",
+                    "client_name": client_name,
+                    "load_id": load_id,
+                    "event_date": event_date,
+                    "processed_uri": processed_uri,
+                    "manifest_s3_uri": manifest_uri,
+                }
+            )
+        )
         job.commit()
     except Exception as exc:
         print(json.dumps({"stage": "failed", "error": str(exc)}))

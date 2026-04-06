@@ -23,36 +23,39 @@ resource "aws_iam_role_policy" "this" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowGlueLogging"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:*:*:*"
-      },
-      {
-        Sid    = "AllowS3ReadWritePipelineBucket"
-        Effect = "Allow"
-        Action = [
-          "s3:ListBucket"
-        ]
-        Resource = var.bucket_arn
-      },
-      {
-        Sid    = "AllowS3ObjectReadWritePipelineBucket"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject"
-        ]
-        Resource = "${var.bucket_arn}/*"
-      }
-    ]
+    Statement = concat(
+      [
+        {
+          Sid    = "AllowGlueLogging"
+          Effect = "Allow"
+          Action = [
+            "logs:CreateLogGroup",
+            "logs:CreateLogStream",
+            "logs:PutLogEvents"
+          ]
+          Resource = "arn:aws:logs:*:*:*"
+        },
+        {
+          Sid    = "AllowS3ReadWritePipelineBucket"
+          Effect = "Allow"
+          Action = [
+            "s3:ListBucket"
+          ]
+          Resource = var.bucket_arn
+        },
+        {
+          Sid    = "AllowS3ObjectReadWritePipelineBucket"
+          Effect = "Allow"
+          Action = [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject"
+          ]
+          Resource = "${var.bucket_arn}/*"
+        }
+      ],
+      var.extra_iam_statements
+    )
   })
 }
 

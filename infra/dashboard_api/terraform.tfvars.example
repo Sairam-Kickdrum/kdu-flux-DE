@@ -1,0 +1,24 @@
+aws_region              = "ap-southeast-1"
+project_name            = "kduflux"
+environment             = "dev"
+
+redshift_workgroup_name = "main-workgroup"
+redshift_database       = "main_db"
+redshift_secret_arn     = "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:my-redshift-secret"
+redshift_fact_table     = "public.fact_client_uploads"
+
+api_stage_name                = "v1"
+api_throttling_rate_limit     = 50
+api_throttling_burst_limit    = 100
+lambda_timeout_seconds        = 30
+lambda_memory_size            = 512
+lambda_log_retention_days     = 30
+attach_lambda_to_vpc          = false
+lambda_subnet_ids             = []
+lambda_security_group_ids     = []
+create_lambda_security_group  = false
+lambda_security_group_vpc_id  = ""
+
+tags = {
+  Owner = "data-engineering"
+}
